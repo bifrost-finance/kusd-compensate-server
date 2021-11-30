@@ -7,7 +7,7 @@ const user_kusds = (sequelize, DataTypes) => {
         allowNull: false,
         primaryKey: true,
       },
-      kusd_amount: {
+      value: {
         type: DataTypes.STRING,
       },
     },

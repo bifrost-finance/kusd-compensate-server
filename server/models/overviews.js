@@ -1,6 +1,6 @@
-const overview = (sequelize, DataTypes) => {
+const overviews = (sequelize, DataTypes) => {
   const Overviews = sequelize.define(
-    "overview",
+    "overviews",
     {
       // 一个para_id可能有多场募集，所以用不同的id来标识
       total_kusd: {
@@ -9,8 +9,11 @@ const overview = (sequelize, DataTypes) => {
       compensate_coefficient: {
         type: DataTypes.DOUBLE,
       },
-      checkpoint: {
-        type: DataTypes.DATE,
+      start_block: {
+        type: DataTypes.INTEGER,
+      },
+      checkpoint_block: {
+        type: DataTypes.INTEGER,
       },
       first_claim_proportion: {
         type: DataTypes.DOUBLE,
@@ -24,4 +27,4 @@ const overview = (sequelize, DataTypes) => {
   return Overviews;
 };
 
-export default overview;
+export default overviews;

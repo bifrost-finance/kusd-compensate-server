@@ -9,7 +9,7 @@ const sequelize = new Sequelize(process.env.POSTGRESQL_URI, {
 
 const models = {
   FirstClaims: require("./first_claims").default(sequelize, Sequelize),
-  Overview: require("./overview").default(sequelize, Sequelize),
+  Overviews: require("./overviews").default(sequelize, Sequelize),
   SecondClaims: require("./second_claims").default(sequelize, Sequelize),
   UserKusds: require("./user_kusds").default(sequelize, Sequelize),
 };
