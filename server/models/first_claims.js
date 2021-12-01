@@ -7,12 +7,16 @@ const first_claims = (sequelize, DataTypes) => {
         allowNull: false,
         primaryKey: true,
       },
+      upper_limit: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
       claimed_amount: {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      timestamp: {
-        type: DataTypes.STRING,
+      claimed_block: {
+        type: DataTypes.INTEGER,
         allowNull: false,
       },
     },

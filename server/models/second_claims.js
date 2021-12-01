@@ -11,7 +11,7 @@ const second_claims = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      timestamp: {
+      claimed_block: {
         type: DataTypes.STRING,
         allowNull: false,
       },

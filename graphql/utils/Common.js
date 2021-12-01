@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 
 import { decodeAddress, encodeAddress } from "@polkadot/keyring";
 import { hexToU8a, isHex, bnToBn } from "@polkadot/util";
+import { ApiPromise, Keyring } from "@polkadot/api";
+import { cryptoWaitReady } from "@polkadot/util-crypto";
 import fs from "fs";
 import XLSX from "xlsx";
 
@@ -11,12 +13,25 @@ dotenv.config();
 // 环境变量
 const TOTAL_KUSD = process.env.TOTAL_KUSD;
 const COMPENSATE_COEFFICIENT = parseFloat(process.env.COMPENSATE_COEFFICIENT);
-const START_BLOCK = parseInt(process.env.START_BLOCK);
-const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
 const FIRST_CLAIM_PROPORTION = parseFloat(process.env.FIRST_CLAIM_PROPORTION);
 const DATA_PATH = process.env.DATA_PATH;
+const BIFROST_END_POINT = process.env.BIFROST_END_POINT;
+export const START_BLOCK = parseInt(process.env.START_BLOCK);
+export const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
+const MNEMONIC_PHRASE = process.env.MNEMONIC_PHRASE;
 
-const BN_ZERO = new BigNumber(0);
+// 常量
+export const TOTAL_COMPENSATION = new BigNumber(TOTAL_KUSD).multipliedBy(
+  COMPENSATE_COEFFICIENT
+);
+export const FIRST_CLAIMABLE_TOTAL = TOTAL_COMPENSATION.multipliedBy(
+  FIRST_CLAIM_PROPORTION
+);
+export const FIRST_CLAIM_COMPENSATION_PER_BLOCK = TOTAL_COMPENSATION.multipliedBy(
+  FIRST_CLAIM_PROPORTION
+).dividedBy(CHECKPOINT_BLOCK - START_BLOCK);
+
+export const BN_ZERO = new BigNumber(0);
 
 // *************************
 // return bignumber format. Only valid for single layer filed.
@@ -76,6 +91,8 @@ export const readSourceData = (data_path) => {
     }
   }
 
+  console.log(correctedList);
+
   return correctedList;
 };
 
@@ -134,4 +151,185 @@ const on_user_kusds_initialize = async (models) => {
   if (user_list != []) {
     await models.UserKusds.bulkCreate(user_list);
   }
+};
+
+/// 获取bifrost链api
+export const getBifrostApi = async () => {
+  const provider = new WsProvider(BIFROST_END_POINT);
+  const api = await ApiPromise.create({ provider });
+  await cryptoWaitReady();
+
+  const keyring = new Keyring({ type: "sr25519" });
+  const senderKeyring = keyring.addFromUri(MNEMONIC_PHRASE);
+
+  return { api, senderKeyring };
+};
+
+/// 查询claims表格是否有记录
+export const getClaimedAmount = async (claimRound, account) => {
+  let condition = {
+    where: {
+      account: account,
+    },
+    raw: true,
+  };
+
+  let rs;
+  if (claimRound == 2) {
+    rs = await models.SecondClaims.findOne(condition);
+  } else {
+    rs = await models.FirstClaims.findOne(condition);
+  }
+
+  let claimed_amount = BN_ZERO;
+  if (rs) {
+    claimed_amount = new BigNumber(rs.claimed_amount);
+  }
+
+  return claimed_amount;
+};
+
+/// 获取现在这个时点，第一轮领取总额
+export const getFirstClaimedTotal = async () => {
+  let condition = {
+    attributes: [
+      [sequelize.literal(`SUM(claimed_amount::bigint)`), "total_claimed"],
+      [sequelize.literal(`SUM(upper_limit::bigint)`), "total_limit"],
+    ],
+    raw: true,
+  };
+
+  let rs = (await models.FirstClaims.findAll(condition))[0];
+  return {
+    totalClaimed: new BigNumber(rs["total_claimed"]),
+    totalLimit: new BigNumber(rs["total_limit"]),
+  };
+};
+
+// 必须在第一轮结束之后调用这个数据才准。计算第二轮可供瓜分的数额
+export const getSecondClaimableTotal = async () => {
+  let { totalClaimed, totalLimit } = await getFirstClaimedTotal();
+
+  let yet_first_claims = FIRST_CLAIMABLE_TOTAL.minus(totalLimit);
+  let second_claimable_total = TOTAL_COMPENSATION.minus(totalClaimed).minus(
+    yet_first_claims
+  );
+
+  return second_claimable_total;
+};
+
+// 验证用户身份
+export const verifySignature = async (account, message, signature) => {
+  const message_u8a = stringToU8a(message);
+  const { isValid } = signatureVerify(message_u8a, signature, account);
+
+  return isValid;
+};
+
+// 获取当前bifrost链的区块号
+export const getCurrentBlock = async () => {
+  const { api } = await getBifrostApi();
+  const currentBlock = (await api.rpc.chain.getBlock()).block.header.number;
+
+  return currentBlock;
+};
+
+// 获取用户在两轮的仍可领取金额
+export const getUserClaimableAmount = async (account) => {
+  let firstClaimableAmount = BN_ZERO;
+  let secondClaimableAmount = BN_ZERO;
+
+  // 先查询用户是否在列表里
+  let condition = {
+    where: {
+      account: account,
+    },
+    raw: true,
+  };
+  let rs = await models.UserKusds.findOne(condition);
+
+  // 用户不存在，则返回0
+  let compensation_base = BN_ZERO;
+  if (rs) {
+    compensation_base = new BigNumber(rs.value);
+  } else {
+    return {
+      firstClaimableAmount: firstClaimableAmount.toFixed(0),
+      secondClaimableAmount: secondClaimableAmount.toFixed(0),
+    };
+  }
+
+  // 获取现在bifrost链上区块。
+  const currentBlock = await getCurrentBlock();
+
+  const userPortion = new BigNumber(rs.value).dividedBy(TOTAL_KUSD);
+
+  let firstClaimed = await getClaimedAmount(1, account);
+  // 如果now<checkpoint,则去查询first_claims有没有记录，没有的话，计算一个，已经有的话，返回0
+  if (currentBlock < CHECKPOINT_BLOCK) {
+    // 说明没有取过第一次
+    if (firstClaimed.isEqualTo(BN_ZERO)) {
+      firstClaimableAmount = FIRST_CLAIM_COMPENSATION_PER_BLOCK.multipliedBy(
+        currentBlock - START_BLOCK
+      ).multipliedBy(userPortion);
+    }
+
+    return {
+      firstClaimableAmount: firstClaimableAmount.toFixed(0),
+      secondClaimableAmount: secondClaimableAmount.toFixed(0),
+    };
+  }
+
+  // 剩下能继续运行，说明currentBlock>=CHECKPOINT_BLOCK
+  let firstAlreadyClaimedTotal = await getFirstClaimedTotal();
+  let secondClaimed = await getClaimedAmount(2, account);
+  // 如果两次都没取过
+  if (firstClaimed.isEqualTo(BN_ZERO) && secondClaimed.isEqualTo(BN_ZERO)) {
+    firstClaimableAmount = FIRST_CLAIMABLE_TOTAL.multipliedBy(userPortion);
+
+    secondClaimableAmount = (await getSecondClaimableTotal()).multipliedBy(
+      userPortion
+    );
+    // 第一次取过了，第二次没取过
+  } else if (secondClaimed.isEqualTo(BN_ZERO)) {
+    secondClaimableAmount = (await getSecondClaimableTotal()).multipliedBy(
+      userPortion
+    );
+  }
+
+  return {
+    firstClaimableAmount: firstClaimableAmount.toFixed(0),
+    secondClaimableAmount: secondClaimableAmount.toFixed(0),
+  };
+};
+
+// 签名并发送转账交易
+export const transactionSignAndSend = async (transfer_amount, account) => {
+  // 构造交易
+  let transaction = api.tx.balances.transfer(account, transfer_amount);
+  let { senderKeyring } = await getBifrostApi();
+
+  const unsub = await transaction.signAndSend(
+    senderKeyring,
+    async ({ status, dispatchError }) => {
+      let rs;
+      // 如果交易已经被执行
+      if (status.isInBlock || status.isFinalized) {
+        if (dispatchError != undefined) {
+          rs = {
+            status: "fail",
+            massage: dispatchError.toString(),
+          };
+        } else {
+          rs = {
+            status: "ok",
+            massage: "",
+          };
+        }
+        unsub();
+
+        return rs;
+      }
+    }
+  );
 };

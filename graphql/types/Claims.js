@@ -1,9 +1,13 @@
 const { gql } = require("apollo-server");
 
 const Campaign = gql`
-  input RecordClaimsInput {
+  type ClaimableAmount {
+    firstClaimableAmount: String
+    secondClaimableAmount: String
+  }
+
+  input ClaimsInput {
     account: String!
-    claimed_amount: String!
   }
 
   type RecordStatus {
@@ -12,12 +16,12 @@ const Campaign = gql`
   }
 
   type Query {
-    getClaimableAmount(account: String): String
+    getClaimableAmount(account: String): ClaimableAmount
     verifySignature(account: String, signature: String): Boolean
   }
 
   type Mutation {
-    recordClaims(input: RecordClaimsInput): RecordStatus
+    claimCompensation(input: ClaimsInput): RecordStatus
   }
 `;
 
