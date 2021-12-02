@@ -8,16 +8,16 @@ const Campaign = gql`
 
   input ClaimsInput {
     account: String!
+    signature: String!
   }
 
   type RecordStatus {
-    status: Boolean
+    status: String
     massage: String
   }
 
   type Query {
     getClaimableAmount(account: String): ClaimableAmount
-    verifySignature(account: String, signature: String): Boolean
   }
 
   type Mutation {

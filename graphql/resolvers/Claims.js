@@ -1,11 +1,14 @@
 import dotenv from "dotenv";
 import {
   BN_ZERO,
+  MESSAGE,
   on_initialize,
   getCurrentBlock,
   convertAddressFormat,
   getUserClaimableAmount,
   getCalculationConsts,
+  verifySignature,
+  transactionSignAndSend,
 } from "../utils/Common";
 import BigNumber from "bignumber.js";
 
@@ -29,7 +32,14 @@ const Claims = {
         };
       }
 
-      return getUserClaimableAmount(address, models);
+      let {
+        firstClaimableAmount,
+        secondClaimableAmount,
+      } = await getUserClaimableAmount(address, models);
+      return {
+        firstClaimableAmount: firstClaimableAmount.toFixed(0),
+        secondClaimableAmount: secondClaimableAmount.toFixed(0),
+      };
     },
   },
   // =============================================================================
@@ -40,7 +50,7 @@ const Claims = {
     claimCompensation: async (parent, { input }, { models }) => {
       await on_initialize(models);
 
-      let { account } = input;
+      let { account, signature } = input;
 
       let { total_kusd, first_claimable_total } = await getCalculationConsts(
         models
@@ -52,6 +62,14 @@ const Claims = {
         return {
           status: "fail",
           massage: "incorrect_address",
+        };
+      }
+
+      let verified = verifySignature(address, MESSAGE, signature);
+      if (!verified) {
+        return {
+          status: "fail",
+          massage: "signature_invalid",
         };
       }
 
@@ -68,7 +86,10 @@ const Claims = {
       // 转账
       let rs;
       if (total_claimable_amount.isGreaterThan(BN_ZERO)) {
-        rs = await transactionSignAndSend(transfer_amount, address);
+        rs = await transactionSignAndSend(
+          total_claimable_amount.toFixed(0),
+          address
+        );
 
         // 修改数据库状态
         const condition = {
@@ -78,6 +99,7 @@ const Claims = {
           raw: true,
         };
         const user_data = await models.UserKusds.findOne(condition);
+
         const userPortion = new BigNumber(user_data.value).dividedBy(
           total_kusd
         );
@@ -87,24 +109,24 @@ const Claims = {
           // 用户在第一阶段最多能领取的补偿
           const upper_limit = first_claimable_total.multipliedBy(userPortion);
 
-          let new_data = {
+          let new_data_1 = {
             account: address,
-            upper_limit,
+            upper_limit: upper_limit.toFixed(0),
             claimed_amount: firstClaimableAmount.toFixed(0),
             claimed_block: currentBlock,
           };
 
-          await models.FirstClaims.create(new_data);
+          await models.FirstClaims.create(new_data_1);
         }
 
         if (secondClaimableAmount.isGreaterThan(BN_ZERO)) {
-          let new_data = {
+          let new_data_2 = {
             account: address,
             claimed_amount: secondClaimableAmount.toFixed(0),
             claimed_block: currentBlock,
           };
 
-          await models.SecondClaims.create(new_data);
+          await models.SecondClaims.create(new_data_2);
         }
 
         return rs;

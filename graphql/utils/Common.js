@@ -3,9 +3,9 @@ import dotenv from "dotenv";
 import { sequelize } from "../../server/models";
 
 import { decodeAddress, encodeAddress } from "@polkadot/keyring";
-import { hexToU8a, isHex } from "@polkadot/util";
+import { hexToU8a, isHex, u8aToHex, stringToU8a } from "@polkadot/util";
 import { ApiPromise, Keyring, WsProvider } from "@polkadot/api";
-import { cryptoWaitReady } from "@polkadot/util-crypto";
+import { cryptoWaitReady, signatureVerify } from "@polkadot/util-crypto";
 import fs from "fs";
 import XLSX from "xlsx";
 
@@ -22,8 +22,8 @@ const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
 const MNEMONIC_PHRASE = process.env.MNEMONIC_PHRASE;
 
 // 常量
-
 export const BN_ZERO = new BigNumber(0);
+export const MESSAGE = "check";
 
 // 从数据库中获取数据，以及做一些常量的计算
 export const getCalculationConsts = async (models) => {
@@ -43,7 +43,7 @@ export const getCalculationConsts = async (models) => {
     rs.checkpoint_block - rs.start_block
   );
 
-  let a = {
+  return {
     total_kusd,
     start_block,
     checkpoint_block,
@@ -51,9 +51,6 @@ export const getCalculationConsts = async (models) => {
     first_claimable_total,
     first_claim_compensation_per_block,
   };
-
-  console.log("aaaaa: ", a);
-  return a;
 };
 
 // *************************
@@ -113,8 +110,6 @@ export const readSourceData = (data_path) => {
       });
     }
   }
-
-  console.log(correctedList);
 
   return correctedList;
 };
@@ -224,8 +219,6 @@ export const getFirstClaimedTotal = async (models) => {
 
   let rs = (await models.FirstClaims.findAll(condition))[0];
 
-  console.log("rs: ", rs);
-
   return {
     totalClaimed: new BigNumber(rs["total_claimed"] || 0),
     totalLimit: new BigNumber(rs["total_limit"] || 0),
@@ -251,8 +244,11 @@ export const getSecondClaimableTotal = async (models) => {
 
 // 验证用户身份
 export const verifySignature = async (account, message, signature) => {
+  const publicKey = decodeAddress(account);
+  const hexPublicKey = u8aToHex(publicKey);
+
   const message_u8a = stringToU8a(message);
-  const { isValid } = signatureVerify(message_u8a, signature, account);
+  const { isValid } = signatureVerify(message_u8a, signature, hexPublicKey);
 
   return isValid;
 };
@@ -260,7 +256,9 @@ export const verifySignature = async (account, message, signature) => {
 // 获取当前bifrost链的区块号
 export const getCurrentBlock = async () => {
   const { api } = await getBifrostApi();
-  const currentBlock = (await api.rpc.chain.getBlock()).block.header.number;
+  const currentBlock = (
+    await api.rpc.chain.getBlock()
+  ).block.header.number.toHuman();
 
   return currentBlock;
 };
@@ -288,13 +286,10 @@ export const getUserClaimableAmount = async (account, models) => {
   let rs = await models.UserKusds.findOne(condition);
 
   // 用户不存在，则返回0
-  let compensation_base = BN_ZERO;
-  if (rs) {
-    compensation_base = new BigNumber(rs.value);
-  } else {
+  if (!rs) {
     return {
-      firstClaimableAmount: firstClaimableAmount.toFixed(0),
-      secondClaimableAmount: secondClaimableAmount.toFixed(0),
+      firstClaimableAmount,
+      secondClaimableAmount,
     };
   }
 
@@ -314,8 +309,8 @@ export const getUserClaimableAmount = async (account, models) => {
     }
 
     return {
-      firstClaimableAmount: firstClaimableAmount.toFixed(0),
-      secondClaimableAmount: secondClaimableAmount.toFixed(0),
+      firstClaimableAmount,
+      secondClaimableAmount,
     };
   }
 
@@ -336,38 +331,45 @@ export const getUserClaimableAmount = async (account, models) => {
   }
 
   return {
-    firstClaimableAmount: firstClaimableAmount.toFixed(0),
-    secondClaimableAmount: secondClaimableAmount.toFixed(0),
+    firstClaimableAmount,
+    secondClaimableAmount,
   };
 };
 
 // 签名并发送转账交易
 export const transactionSignAndSend = async (transfer_amount, account) => {
   // 构造交易
+  let { senderKeyring, api } = await getBifrostApi();
   let transaction = api.tx.balances.transfer(account, transfer_amount);
-  let { senderKeyring } = await getBifrostApi();
+  let rs = {
+    status: "ok",
+    massage: "",
+  };
 
-  const unsub = await transaction.signAndSend(
-    senderKeyring,
-    async ({ status, dispatchError }) => {
-      let rs;
-      // 如果交易已经被执行
-      if (status.isInBlock || status.isFinalized) {
-        if (dispatchError != undefined) {
-          rs = {
-            status: "fail",
-            massage: dispatchError.toString(),
-          };
-        } else {
-          rs = {
-            status: "ok",
-            massage: "",
-          };
+  let done = false;
+  while (!done) {
+    try {
+      const unsub = await transaction.signAndSend(
+        senderKeyring,
+        // { nonce: -1 },
+        async ({ status, dispatchError }) => {
+          // 如果交易已经被执行
+          if (status.isInBlock || status.isFinalized) {
+            if (dispatchError != undefined) {
+              rs = {
+                status: "fail",
+                massage: dispatchError.toString(),
+              };
+            }
+            unsub();
+          }
         }
-        unsub();
-
-        return rs;
-      }
+      );
+      done = true;
+    } catch (e) {
+      console.log(e);
     }
-  );
+  }
+
+  return rs;
 };
