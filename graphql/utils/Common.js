@@ -1,9 +1,10 @@
 import BigNumber from "bignumber.js";
 import dotenv from "dotenv";
+import { sequelize } from "../../server/models";
 
 import { decodeAddress, encodeAddress } from "@polkadot/keyring";
-import { hexToU8a, isHex, bnToBn } from "@polkadot/util";
-import { ApiPromise, Keyring } from "@polkadot/api";
+import { hexToU8a, isHex } from "@polkadot/util";
+import { ApiPromise, Keyring, WsProvider } from "@polkadot/api";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import fs from "fs";
 import XLSX from "xlsx";
@@ -16,22 +17,44 @@ const COMPENSATE_COEFFICIENT = parseFloat(process.env.COMPENSATE_COEFFICIENT);
 const FIRST_CLAIM_PROPORTION = parseFloat(process.env.FIRST_CLAIM_PROPORTION);
 const DATA_PATH = process.env.DATA_PATH;
 const BIFROST_END_POINT = process.env.BIFROST_END_POINT;
-export const START_BLOCK = parseInt(process.env.START_BLOCK);
-export const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
+const START_BLOCK = parseInt(process.env.START_BLOCK);
+const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
 const MNEMONIC_PHRASE = process.env.MNEMONIC_PHRASE;
 
 // 常量
-export const TOTAL_COMPENSATION = new BigNumber(TOTAL_KUSD).multipliedBy(
-  COMPENSATE_COEFFICIENT
-);
-export const FIRST_CLAIMABLE_TOTAL = TOTAL_COMPENSATION.multipliedBy(
-  FIRST_CLAIM_PROPORTION
-);
-export const FIRST_CLAIM_COMPENSATION_PER_BLOCK = TOTAL_COMPENSATION.multipliedBy(
-  FIRST_CLAIM_PROPORTION
-).dividedBy(CHECKPOINT_BLOCK - START_BLOCK);
 
 export const BN_ZERO = new BigNumber(0);
+
+// 从数据库中获取数据，以及做一些常量的计算
+export const getCalculationConsts = async (models) => {
+  const rs = await models.Overviews.findOne({ raw: true });
+
+  const start_block = rs.start_block;
+  const checkpoint_block = rs.checkpoint_block;
+  const total_kusd = rs.total_kusd;
+
+  const total_compensation = new BigNumber(rs.total_kusd).multipliedBy(
+    rs.compensate_coefficient
+  );
+  const first_claimable_total = total_compensation.multipliedBy(
+    rs.first_claim_proportion
+  );
+  const first_claim_compensation_per_block = first_claimable_total.dividedBy(
+    rs.checkpoint_block - rs.start_block
+  );
+
+  let a = {
+    total_kusd,
+    start_block,
+    checkpoint_block,
+    total_compensation,
+    first_claimable_total,
+    first_claim_compensation_per_block,
+  };
+
+  console.log("aaaaa: ", a);
+  return a;
+};
 
 // *************************
 // return bignumber format. Only valid for single layer filed.
@@ -166,7 +189,7 @@ export const getBifrostApi = async () => {
 };
 
 /// 查询claims表格是否有记录
-export const getClaimedAmount = async (claimRound, account) => {
+export const getClaimedAmount = async (claimRound, account, models) => {
   let condition = {
     where: {
       account: account,
@@ -190,7 +213,7 @@ export const getClaimedAmount = async (claimRound, account) => {
 };
 
 /// 获取现在这个时点，第一轮领取总额
-export const getFirstClaimedTotal = async () => {
+export const getFirstClaimedTotal = async (models) => {
   let condition = {
     attributes: [
       [sequelize.literal(`SUM(claimed_amount::bigint)`), "total_claimed"],
@@ -200,20 +223,28 @@ export const getFirstClaimedTotal = async () => {
   };
 
   let rs = (await models.FirstClaims.findAll(condition))[0];
+
+  console.log("rs: ", rs);
+
   return {
-    totalClaimed: new BigNumber(rs["total_claimed"]),
-    totalLimit: new BigNumber(rs["total_limit"]),
+    totalClaimed: new BigNumber(rs["total_claimed"] || 0),
+    totalLimit: new BigNumber(rs["total_limit"] || 0),
   };
 };
 
 // 必须在第一轮结束之后调用这个数据才准。计算第二轮可供瓜分的数额
-export const getSecondClaimableTotal = async () => {
-  let { totalClaimed, totalLimit } = await getFirstClaimedTotal();
+export const getSecondClaimableTotal = async (models) => {
+  let { totalClaimed, totalLimit } = await getFirstClaimedTotal(models);
 
-  let yet_first_claims = FIRST_CLAIMABLE_TOTAL.minus(totalLimit);
-  let second_claimable_total = TOTAL_COMPENSATION.minus(totalClaimed).minus(
-    yet_first_claims
-  );
+  let {
+    first_claimable_total,
+    total_compensation,
+  } = await getCalculationConsts(models);
+
+  let yet_first_claims = first_claimable_total.minus(totalLimit);
+  let second_claimable_total = total_compensation
+    .minus(totalClaimed)
+    .minus(yet_first_claims);
 
   return second_claimable_total;
 };
@@ -235,9 +266,17 @@ export const getCurrentBlock = async () => {
 };
 
 // 获取用户在两轮的仍可领取金额
-export const getUserClaimableAmount = async (account) => {
+export const getUserClaimableAmount = async (account, models) => {
   let firstClaimableAmount = BN_ZERO;
   let secondClaimableAmount = BN_ZERO;
+
+  let {
+    total_kusd,
+    start_block,
+    checkpoint_block,
+    first_claimable_total,
+    first_claim_compensation_per_block,
+  } = await getCalculationConsts(models);
 
   // 先查询用户是否在列表里
   let condition = {
@@ -262,16 +301,16 @@ export const getUserClaimableAmount = async (account) => {
   // 获取现在bifrost链上区块。
   const currentBlock = await getCurrentBlock();
 
-  const userPortion = new BigNumber(rs.value).dividedBy(TOTAL_KUSD);
+  const userPortion = new BigNumber(rs.value).dividedBy(total_kusd);
 
-  let firstClaimed = await getClaimedAmount(1, account);
+  let firstClaimed = await getClaimedAmount(1, account, models);
   // 如果now<checkpoint,则去查询first_claims有没有记录，没有的话，计算一个，已经有的话，返回0
-  if (currentBlock < CHECKPOINT_BLOCK) {
+  if (currentBlock < checkpoint_block) {
     // 说明没有取过第一次
     if (firstClaimed.isEqualTo(BN_ZERO)) {
-      firstClaimableAmount = FIRST_CLAIM_COMPENSATION_PER_BLOCK.multipliedBy(
-        currentBlock - START_BLOCK
-      ).multipliedBy(userPortion);
+      firstClaimableAmount = first_claim_compensation_per_block
+        .multipliedBy(currentBlock - start_block)
+        .multipliedBy(userPortion);
     }
 
     return {
@@ -281,20 +320,19 @@ export const getUserClaimableAmount = async (account) => {
   }
 
   // 剩下能继续运行，说明currentBlock>=CHECKPOINT_BLOCK
-  let firstAlreadyClaimedTotal = await getFirstClaimedTotal();
-  let secondClaimed = await getClaimedAmount(2, account);
+  let secondClaimed = await getClaimedAmount(2, account, models);
   // 如果两次都没取过
   if (firstClaimed.isEqualTo(BN_ZERO) && secondClaimed.isEqualTo(BN_ZERO)) {
-    firstClaimableAmount = FIRST_CLAIMABLE_TOTAL.multipliedBy(userPortion);
+    firstClaimableAmount = first_claimable_total.multipliedBy(userPortion);
 
-    secondClaimableAmount = (await getSecondClaimableTotal()).multipliedBy(
-      userPortion
-    );
+    secondClaimableAmount = (
+      await getSecondClaimableTotal(models)
+    ).multipliedBy(userPortion);
     // 第一次取过了，第二次没取过
   } else if (secondClaimed.isEqualTo(BN_ZERO)) {
-    secondClaimableAmount = (await getSecondClaimableTotal()).multipliedBy(
-      userPortion
-    );
+    secondClaimableAmount = (
+      await getSecondClaimableTotal(models)
+    ).multipliedBy(userPortion);
   }
 
   return {

@@ -3,14 +3,11 @@ import {
   BN_ZERO,
   on_initialize,
   getCurrentBlock,
-  FIRST_CLAIMABLE_TOTAL,
+  convertAddressFormat,
+  getUserClaimableAmount,
+  getCalculationConsts,
 } from "../utils/Common";
 import BigNumber from "bignumber.js";
-dotenv.config();
-
-// 环境变量
-
-const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
 
 // GraphQL查询的resolver
 const Claims = {
@@ -32,7 +29,7 @@ const Claims = {
         };
       }
 
-      return getUserClaimableAmount(address);
+      return getUserClaimableAmount(address, models);
     },
   },
   // =============================================================================
@@ -44,6 +41,11 @@ const Claims = {
       await on_initialize(models);
 
       let { account } = input;
+
+      let { total_kusd, first_claimable_total } = await getCalculationConsts(
+        models
+      );
+
       let address = convertAddressFormat(account, 6);
 
       if (!address) {
@@ -57,7 +59,7 @@ const Claims = {
       let {
         firstClaimableAmount,
         secondClaimableAmount,
-      } = await getUserClaimableAmount(address);
+      } = await getUserClaimableAmount(address, models);
 
       let total_claimable_amount = firstClaimableAmount.plus(
         secondClaimableAmount
@@ -77,13 +79,13 @@ const Claims = {
         };
         const user_data = await models.UserKusds.findOne(condition);
         const userPortion = new BigNumber(user_data.value).dividedBy(
-          TOTAL_KUSD
+          total_kusd
         );
 
         const currentBlock = await getCurrentBlock();
         if (firstClaimableAmount.isGreaterThan(BN_ZERO)) {
           // 用户在第一阶段最多能领取的补偿
-          const upper_limit = FIRST_CLAIMABLE_TOTAL.multipliedBy(userPortion);
+          const upper_limit = first_claimable_total.multipliedBy(userPortion);
 
           let new_data = {
             account: address,
