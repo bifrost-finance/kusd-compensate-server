@@ -3,10 +3,8 @@ import {
   BN_ZERO,
   MESSAGE,
   on_initialize,
-  getCurrentBlock,
   convertAddressFormat,
   getUserClaimableAmount,
-  getCalculationConsts,
   verifySignature,
   transactionSignAndSend,
 } from "../utils/Common";
@@ -52,10 +50,6 @@ const Claims = {
 
       let { account, signature } = input;
 
-      let { total_kusd, first_claimable_total } = await getCalculationConsts(
-        models
-      );
-
       let address = convertAddressFormat(account, 6);
 
       if (!address) {
@@ -84,52 +78,37 @@ const Claims = {
       );
 
       // 转账
-      let rs;
       if (total_claimable_amount.isGreaterThan(BN_ZERO)) {
-        rs = await transactionSignAndSend(
-          total_claimable_amount.toFixed(0),
+        await transactionSignAndSend(
+          models,
+          firstClaimableAmount,
+          secondClaimableAmount,
           address
         );
 
-        // 修改数据库状态
-        const condition = {
-          where: {
-            account: address,
-          },
-          raw: true,
+        // callback不能马上有结果，所以不能获取即时回馈
+        // // 最后再查询一下数据库，如果有，则通知前端成功了，如果没有，则通知失败
+        // let condition = {
+        //   where: {
+        //     account: address,
+        //   },
+        //   raw: true,
+        // };
+
+        // const first_record = await models.FirstClaims.findOne(condition);
+        // const second_record = await models.SecondClaims.findOne(condition);
+
+        // let transfer_amount = new BigNumber(0);
+        // if (first_record && second_record) {
+        //   transfer_amount = total_claimable_amount;
+        // } else if (first_record) {
+        //   transfer_amount = firstClaimableAmount;
+        // }
+
+        return {
+          status: "ok",
+          massage: total_claimable_amount.toFixed(0),
         };
-        const user_data = await models.UserKusds.findOne(condition);
-
-        const userPortion = new BigNumber(user_data.value).dividedBy(
-          total_kusd
-        );
-
-        const currentBlock = await getCurrentBlock();
-        if (firstClaimableAmount.isGreaterThan(BN_ZERO)) {
-          // 用户在第一阶段最多能领取的补偿
-          const upper_limit = first_claimable_total.multipliedBy(userPortion);
-
-          let new_data_1 = {
-            account: address,
-            upper_limit: upper_limit.toFixed(0),
-            claimed_amount: firstClaimableAmount.toFixed(0),
-            claimed_block: currentBlock,
-          };
-
-          await models.FirstClaims.create(new_data_1);
-        }
-
-        if (secondClaimableAmount.isGreaterThan(BN_ZERO)) {
-          let new_data_2 = {
-            account: address,
-            claimed_amount: secondClaimableAmount.toFixed(0),
-            claimed_block: currentBlock,
-          };
-
-          await models.SecondClaims.create(new_data_2);
-        }
-
-        return rs;
       } else {
         return {
           status: "fail",

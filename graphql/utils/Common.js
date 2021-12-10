@@ -8,6 +8,7 @@ import { ApiPromise, Keyring, WsProvider } from "@polkadot/api";
 import { cryptoWaitReady, signatureVerify } from "@polkadot/util-crypto";
 import fs from "fs";
 import XLSX from "xlsx";
+import { SSL_OP_EPHEMERAL_RSA } from "constants";
 
 dotenv.config();
 
@@ -337,39 +338,128 @@ export const getUserClaimableAmount = async (account, models) => {
 };
 
 // 签名并发送转账交易
-export const transactionSignAndSend = async (transfer_amount, account) => {
+export const transactionSignAndSend = async (
+  models,
+  firstClaimableAmount,
+  secondClaimableAmount,
+  account
+) => {
   // 构造交易
   let { senderKeyring, api } = await getBifrostApi();
   let transaction = api.tx.balances.transfer(account, transfer_amount);
-  let rs = {
-    status: "ok",
-    massage: "",
-  };
+  let statusHash = null;
+  let transfer_amount = firstClaimableAmount.plus(secondClaimableAmount);
 
-  let done = false;
-  while (!done) {
-    try {
-      const unsub = await transaction.signAndSend(
-        senderKeyring,
-        // { nonce: -1 },
-        async ({ status, dispatchError }) => {
-          // 如果交易已经被执行
-          if (status.isInBlock || status.isFinalized) {
-            if (dispatchError != undefined) {
-              rs = {
-                status: "fail",
-                massage: dispatchError.toString(),
-              };
-            }
-            unsub();
+  let { total_kusd, first_claimable_total } = await getCalculationConsts(
+    models
+  );
+
+  // 处理正常能获取的情况
+  try {
+    const unsub = await transaction.signAndSend(
+      senderKeyring,
+      { nonce: -1 },
+      async ({ events = [], status }) => {
+        // 如果交易已经被Finalized（只是说明被定性了，不代表成功了），且发的event是成功的，则交易就是成功的
+        if (status.isFinalized) {
+          events.filter((evt) => evt.method == "ExtrinsicSuccess");
+          if (events.length > 0) {
+            statusHash = status.asFinalized.toString();
+
+            await revise_database(
+              models,
+              address,
+              firstClaimableAmount,
+              secondClaimableAmount,
+              statusHash
+            );
           }
+
+          unsub();
         }
-      );
-      done = true;
-    } catch (e) {
-      console.log(e);
+      }
+    );
+    // 处理网络中断的情况或其它情况
+  } catch (e) {
+    console.log(Date.now(), " error message: ", e);
+
+    let condition = {
+      where: {
+        account: account,
+        amount: transfer_amount,
+      },
+      raw: true,
+    };
+
+    // 查询三次是否已经交易成功，每次隔36秒（一共9个块左右），如果仍然没有一样的交易(2分钟以内)，则向前端返回交易不成功，如果成功了，刚修改数据库
+    for (let i = 0; i < 3; i++) {
+      condition["updated_at"] = {
+        [Op.lte]: new Date(new Date().getTime() + 1000 * 2 * 60),
+      };
+      let rs = await models.Transfers.findOne(condition);
+      if (rs) {
+        statusHash = rs.extrinsic_hash;
+        await revise_database(
+          address,
+          firstClaimableAmount,
+          secondClaimableAmount,
+          statusHash
+        );
+        break;
+      }
+
+      sleep(36 * 1000);
     }
+
+    return statusHash;
+  }
+};
+
+// sleep function
+const sleep = async (ms) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+// revise database
+const revise_database = async (
+  models,
+  address,
+  firstClaimableAmount,
+  secondClaimableAmount,
+  statusHash
+) => {
+  // 修改数据库状态
+  let condition = {
+    where: {
+      account: address,
+    },
+    raw: true,
+  };
+  const user_data = await models.UserKusds.findOne(condition);
+
+  const userPortion = new BigNumber(user_data.value).dividedBy(total_kusd);
+
+  if (firstClaimableAmount.isGreaterThan(BN_ZERO)) {
+    // 用户在第一阶段最多能领取的补偿
+    const upper_limit = first_claimable_total.multipliedBy(userPortion);
+
+    let new_data_1 = {
+      account: address,
+      upper_limit: upper_limit.toFixed(0),
+      claimed_amount: firstClaimableAmount.toFixed(0),
+      statusHash,
+    };
+
+    await models.FirstClaims.create(new_data_1);
   }
 
-  return rs;
+  if (secondClaimableAmount.isGreaterThan(BN_ZERO)) {
+    let new_data_2 = {
+      account: address,
+      claimed_amount: secondClaimableAmount.toFixed(0),
+      statusHash,
+    };
+
+    await models.SecondClaims.create(new_data_2);
+  }
 };

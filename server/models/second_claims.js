@@ -11,7 +11,7 @@ const second_claims = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      claimed_block: {
+      tx_hash: {
         type: DataTypes.STRING,
         allowNull: false,
       },

@@ -12,6 +12,7 @@ const models = {
   Overviews: require("./overviews").default(sequelize, Sequelize),
   SecondClaims: require("./second_claims").default(sequelize, Sequelize),
   UserKusds: require("./user_kusds").default(sequelize, Sequelize),
+  Transfers: require("./transfers").default(sequelize, Sequelize),
 };
 
 Object.keys(models).forEach((key) => {

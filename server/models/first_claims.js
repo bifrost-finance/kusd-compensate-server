@@ -15,8 +15,8 @@ const first_claims = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      claimed_block: {
-        type: DataTypes.INTEGER,
+      tx_hash: {
+        type: DataTypes.STRING,
         allowNull: false,
       },
     },
