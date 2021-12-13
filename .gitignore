@@ -5,3 +5,9 @@
 .env
 .idea
 .DS_Store
+
+subql/.data
+subql/src/types
+subql/target/
+subql/dist/
+subql/node_modules/
