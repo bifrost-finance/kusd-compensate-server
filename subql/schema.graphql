@@ -15,3 +15,14 @@ type StarterEntity @entity {
 
 
 }
+
+type BalancesTransfer @entity {
+  id: ID!
+  event_id: Int!
+  extrinsic_id: Int
+  extrinsic_hash: String
+  block_height: Int!
+  block_timestamp: Date!
+  account: String
+  amount: BigInt
+}

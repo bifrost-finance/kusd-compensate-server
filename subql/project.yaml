@@ -10,7 +10,7 @@ network:
   endpoint: wss://bifrost-rpc.liebi.com/ws
 dataSources:
   - kind: substrate/Runtime
-    startBlock: 1
+    startBlock: 937560
     mapping:
       file: ./dist/index.js
       handlers:
@@ -23,3 +23,8 @@ dataSources:
             method: Deposit
         - handler: handleCall
           kind: substrate/CallHandler
+        - handler: handleBalancesTransfer
+          kind: substrate/EventHandler
+          filter:
+            module: balances
+            method: Transfer
