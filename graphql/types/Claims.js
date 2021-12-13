@@ -13,7 +13,7 @@ const Campaign = gql`
 
   type RecordStatus {
     status: String
-    massage: String
+    message: String
   }
 
   type Query {

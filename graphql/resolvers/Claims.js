@@ -30,10 +30,8 @@ const Claims = {
         };
       }
 
-      let {
-        firstClaimableAmount,
-        secondClaimableAmount,
-      } = await getUserClaimableAmount(address, models);
+      let { firstClaimableAmount, secondClaimableAmount } =
+        await getUserClaimableAmount(address, models);
       return {
         firstClaimableAmount: firstClaimableAmount.toFixed(0),
         secondClaimableAmount: secondClaimableAmount.toFixed(0),
@@ -55,7 +53,7 @@ const Claims = {
       if (!address) {
         return {
           status: "fail",
-          massage: "incorrect_address",
+          message: "incorrect_address",
         };
       }
 
@@ -63,15 +61,13 @@ const Claims = {
       if (!verified) {
         return {
           status: "fail",
-          massage: "signature_invalid",
+          message: "signature_invalid",
         };
       }
 
       // 获取可领取金额
-      let {
-        firstClaimableAmount,
-        secondClaimableAmount,
-      } = await getUserClaimableAmount(address, models);
+      let { firstClaimableAmount, secondClaimableAmount } =
+        await getUserClaimableAmount(address, models);
 
       let total_claimable_amount = firstClaimableAmount.plus(
         secondClaimableAmount
@@ -79,40 +75,18 @@ const Claims = {
 
       // 转账
       if (total_claimable_amount.isGreaterThan(BN_ZERO)) {
-        await transactionSignAndSend(
+        let rs = await transactionSignAndSend(
           models,
           firstClaimableAmount,
           secondClaimableAmount,
           address
         );
 
-        // callback不能马上有结果，所以不能获取即时回馈
-        // // 最后再查询一下数据库，如果有，则通知前端成功了，如果没有，则通知失败
-        // let condition = {
-        //   where: {
-        //     account: address,
-        //   },
-        //   raw: true,
-        // };
-
-        // const first_record = await models.FirstClaims.findOne(condition);
-        // const second_record = await models.SecondClaims.findOne(condition);
-
-        // let transfer_amount = new BigNumber(0);
-        // if (first_record && second_record) {
-        //   transfer_amount = total_claimable_amount;
-        // } else if (first_record) {
-        //   transfer_amount = firstClaimableAmount;
-        // }
-
-        return {
-          status: "ok",
-          massage: total_claimable_amount.toFixed(0),
-        };
+        return rs;
       } else {
         return {
           status: "fail",
-          massage: "transfer_amount_not_greater_than_zero",
+          message: "transfer_amount_not_greater_than_zero",
         };
       }
     },

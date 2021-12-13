@@ -1,6 +1,7 @@
 import BigNumber from "bignumber.js";
 import dotenv from "dotenv";
 import { sequelize } from "../../server/models";
+import { Op } from "sequelize";
 
 import { decodeAddress, encodeAddress } from "@polkadot/keyring";
 import { hexToU8a, isHex, u8aToHex, stringToU8a } from "@polkadot/util";
@@ -230,10 +231,8 @@ export const getFirstClaimedTotal = async (models) => {
 export const getSecondClaimableTotal = async (models) => {
   let { totalClaimed, totalLimit } = await getFirstClaimedTotal(models);
 
-  let {
-    first_claimable_total,
-    total_compensation,
-  } = await getCalculationConsts(models);
+  let { first_claimable_total, total_compensation } =
+    await getCalculationConsts(models);
 
   let yet_first_claims = first_claimable_total.minus(totalLimit);
   let second_claimable_total = total_compensation
@@ -350,10 +349,6 @@ export const transactionSignAndSend = async (
   let statusHash = null;
   let transfer_amount = firstClaimableAmount.plus(secondClaimableAmount);
 
-  let { total_kusd, first_claimable_total } = await getCalculationConsts(
-    models
-  );
-
   // 处理正常能获取的情况
   try {
     const unsub = await transaction.signAndSend(
@@ -379,14 +374,18 @@ export const transactionSignAndSend = async (
         }
       }
     );
+
+    return {
+      status: "transfer_processed",
+      message: total_claimable_amount.toFixed(0),
+    };
+
     // 处理网络中断的情况或其它情况
   } catch (e) {
-    console.log(Date.now(), " error message: ", e);
-
     let condition = {
       where: {
         account: account,
-        amount: transfer_amount,
+        amount: transfer_amount.toFixed(0),
       },
       raw: true,
     };
@@ -394,24 +393,34 @@ export const transactionSignAndSend = async (
     // 查询三次是否已经交易成功，每次隔36秒（一共9个块左右），如果仍然没有一样的交易(2分钟以内)，则向前端返回交易不成功，如果成功了，刚修改数据库
     for (let i = 0; i < 3; i++) {
       condition["updated_at"] = {
-        [Op.lte]: new Date(new Date().getTime() + 1000 * 2 * 60),
+        [Op.lte]: new Date(new Date() + 1000 * 2 * 60),
       };
+
       let rs = await models.Transfers.findOne(condition);
       if (rs) {
         statusHash = rs.extrinsic_hash;
+
         await revise_database(
-          address,
+          models,
+          account,
           firstClaimableAmount,
           secondClaimableAmount,
           statusHash
         );
-        break;
+
+        return {
+          status: "ok",
+          message: transfer_amount.toFixed(0),
+        };
       }
 
       sleep(36 * 1000);
     }
 
-    return statusHash;
+    return {
+      status: "fail",
+      message: "fail_to_transfer",
+    };
   }
 };
 
@@ -437,6 +446,9 @@ const revise_database = async (
   };
   const user_data = await models.UserKusds.findOne(condition);
 
+  let { total_kusd, first_claimable_total } = await getCalculationConsts(
+    models
+  );
   const userPortion = new BigNumber(user_data.value).dividedBy(total_kusd);
 
   if (firstClaimableAmount.isGreaterThan(BN_ZERO)) {
@@ -447,7 +459,7 @@ const revise_database = async (
       account: address,
       upper_limit: upper_limit.toFixed(0),
       claimed_amount: firstClaimableAmount.toFixed(0),
-      statusHash,
+      tx_hash: statusHash,
     };
 
     await models.FirstClaims.create(new_data_1);
@@ -457,7 +469,7 @@ const revise_database = async (
     let new_data_2 = {
       account: address,
       claimed_amount: secondClaimableAmount.toFixed(0),
-      statusHash,
+      tx_hash: statusHash,
     };
 
     await models.SecondClaims.create(new_data_2);
