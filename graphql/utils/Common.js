@@ -9,12 +9,10 @@ import { ApiPromise, Keyring, WsProvider } from "@polkadot/api";
 import { cryptoWaitReady, signatureVerify } from "@polkadot/util-crypto";
 import fs from "fs";
 import XLSX from "xlsx";
-import { SSL_OP_EPHEMERAL_RSA } from "constants";
 
 dotenv.config();
 
 // 环境变量
-const TOTAL_KUSD = process.env.TOTAL_KUSD;
 const COMPENSATE_COEFFICIENT = parseFloat(process.env.COMPENSATE_COEFFICIENT);
 const FIRST_CLAIM_PROPORTION = parseFloat(process.env.FIRST_CLAIM_PROPORTION);
 const DATA_PATH = process.env.DATA_PATH;
@@ -151,8 +149,13 @@ export const on_initialize = async (models) => {
 
 // 如果overview表格为空，则进行表格初始化
 const on_overview_initialize = async (models) => {
+  let total_kusd = new BigNumber(0);
+  let user_list = readSourceData(DATA_PATH);
+
+  total_kusd = getSumOfAFieldFromList(user_list, "value");
+
   const initOverviewData = {
-    total_kusd: TOTAL_KUSD,
+    total_kusd: total_kusd.toFixed(0),
     compensate_coefficient: COMPENSATE_COEFFICIENT,
     start_block: START_BLOCK,
     checkpoint_block: CHECKPOINT_BLOCK,
