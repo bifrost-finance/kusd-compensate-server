@@ -10,10 +10,10 @@ const overviews = (sequelize, DataTypes) => {
         type: DataTypes.DOUBLE,
       },
       start_block: {
-        type: DataTypes.INTEGER,
+        type: DataTypes.STRING,
       },
       checkpoint_block: {
-        type: DataTypes.INTEGER,
+        type: DataTypes.STRING,
       },
       first_claim_proportion: {
         type: DataTypes.DOUBLE,

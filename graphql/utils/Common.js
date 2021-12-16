@@ -17,8 +17,8 @@ const COMPENSATE_COEFFICIENT = parseFloat(process.env.COMPENSATE_COEFFICIENT);
 const FIRST_CLAIM_PROPORTION = parseFloat(process.env.FIRST_CLAIM_PROPORTION);
 const DATA_PATH = process.env.DATA_PATH;
 const BIFROST_END_POINT = process.env.BIFROST_END_POINT;
-const START_BLOCK = parseInt(process.env.START_BLOCK);
-const CHECKPOINT_BLOCK = parseInt(process.env.CHECKPOINT_BLOCK);
+const START_BLOCK = process.env.START_BLOCK;
+const CHECKPOINT_BLOCK = process.env.CHECKPOINT_BLOCK;
 const MNEMONIC_PHRASE = process.env.MNEMONIC_PHRASE;
 
 // 常量
@@ -29,8 +29,8 @@ export const MESSAGE = "check";
 export const getCalculationConsts = async (models) => {
   const rs = await models.Overviews.findOne({ raw: true });
 
-  const start_block = rs.start_block;
-  const checkpoint_block = rs.checkpoint_block;
+  const start_block = new BigNumber(rs.start_block);
+  const checkpoint_block = new BigNumber(rs.checkpoint_block);
   const total_kusd = rs.total_kusd;
 
   const total_compensation = new BigNumber(rs.total_kusd).multipliedBy(
@@ -40,7 +40,7 @@ export const getCalculationConsts = async (models) => {
     rs.first_claim_proportion
   );
   const first_claim_compensation_per_block = first_claimable_total.dividedBy(
-    rs.checkpoint_block - rs.start_block
+    checkpoint_block.minus(start_block)
   );
 
   return {
@@ -261,7 +261,7 @@ export const getCurrentBlock = async () => {
   const { api } = await getBifrostApi();
   const currentBlock = (
     await api.rpc.chain.getBlock()
-  ).block.header.number.toHuman();
+  ).block.header.number.toString();
 
   return currentBlock;
 };
@@ -278,7 +278,6 @@ export const getUserClaimableAmount = async (account, models) => {
     first_claimable_total,
     first_claim_compensation_per_block,
   } = await getCalculationConsts(models);
-
   // 先查询用户是否在列表里
   let condition = {
     where: {
@@ -297,17 +296,24 @@ export const getUserClaimableAmount = async (account, models) => {
   }
 
   // 获取现在bifrost链上区块。
-  const currentBlock = await getCurrentBlock();
+  const currentBlock = new BigNumber(await getCurrentBlock());
+
+  if (currentBlock.isLessThan(start_block)) {
+    return {
+      firstClaimableAmount,
+      secondClaimableAmount,
+    };
+  }
 
   const userPortion = new BigNumber(rs.value).dividedBy(total_kusd);
 
   let firstClaimed = await getClaimedAmount(1, account, models);
   // 如果now<checkpoint,则去查询first_claims有没有记录，没有的话，计算一个，已经有的话，返回0
-  if (currentBlock < checkpoint_block) {
+  if (currentBlock.isLessThan(checkpoint_block)) {
     // 说明没有取过第一次
     if (firstClaimed.isEqualTo(BN_ZERO)) {
       firstClaimableAmount = first_claim_compensation_per_block
-        .multipliedBy(currentBlock - start_block)
+        .multipliedBy(currentBlock.minus(start_block))
         .multipliedBy(userPortion);
     }
 
@@ -348,9 +354,12 @@ export const transactionSignAndSend = async (
 ) => {
   // 构造交易
   let { senderKeyring, api } = await getBifrostApi();
-  let transaction = api.tx.balances.transfer(account, transfer_amount);
-  let statusHash = null;
   let transfer_amount = firstClaimableAmount.plus(secondClaimableAmount);
+  let transaction = api.tx.balances.transfer(
+    account,
+    transfer_amount.toFixed(0)
+  );
+  let statusHash = null;
 
   // 处理正常能获取的情况
   try {
@@ -380,11 +389,13 @@ export const transactionSignAndSend = async (
 
     return {
       status: "transfer_processed",
-      message: total_claimable_amount.toFixed(0),
+      message: transfer_amount.toFixed(0),
     };
 
     // 处理网络中断的情况或其它情况
   } catch (e) {
+    console.log("error: ", e);
+
     let condition = {
       where: {
         account: account,
