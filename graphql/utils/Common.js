@@ -366,7 +366,7 @@ export const transactionSignAndSend = async (
 
             await revise_database(
               models,
-              address,
+              account,
               firstClaimableAmount,
               secondClaimableAmount,
               statusHash
