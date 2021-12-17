@@ -19,6 +19,10 @@ const first_claims = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
+      block_hash: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
     },
     {
       underscored: true,

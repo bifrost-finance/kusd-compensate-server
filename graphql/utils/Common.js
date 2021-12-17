@@ -359,7 +359,8 @@ export const transactionSignAndSend = async (
     account,
     transfer_amount.toFixed(0)
   );
-  let statusHash = null;
+  let extrinsicHash = transaction.hash.toHex();
+  let blockHash = null;
 
   // 处理正常能获取的情况
   try {
@@ -371,14 +372,15 @@ export const transactionSignAndSend = async (
         if (status.isFinalized) {
           events.filter((evt) => evt.method == "ExtrinsicSuccess");
           if (events.length > 0) {
-            statusHash = status.asFinalized.toString();
+            blockHash = status.asFinalized.toString();
 
             await revise_database(
               models,
               account,
               firstClaimableAmount,
               secondClaimableAmount,
-              statusHash
+              extrinsicHash,
+              blockHash
             );
           }
 
@@ -397,6 +399,13 @@ export const transactionSignAndSend = async (
     console.log("error: ", e);
 
     let condition = {
+      attributes: [
+        "account",
+        [sequelize.literal("amount::text"), "amount"],
+        "extrinsic_hash",
+        "block_height",
+        "block_timestamp",
+      ],
       where: {
         account: account,
         amount: transfer_amount.toFixed(0),
@@ -406,20 +415,26 @@ export const transactionSignAndSend = async (
 
     // 查询三次是否已经交易成功，每次隔36秒（一共9个块左右），如果仍然没有一样的交易(2分钟以内)，则向前端返回交易不成功，如果成功了，刚修改数据库
     for (let i = 0; i < 3; i++) {
-      condition["updated_at"] = {
+      condition["block_timestamp"] = {
         [Op.lte]: new Date(new Date() + 1000 * 2 * 60),
       };
 
-      let rs = await models.Transfers.findOne(condition);
+      let rs = await models.BalancesTransfers.findOne(condition);
       if (rs) {
-        statusHash = rs.extrinsic_hash;
+        // 获取区块hash
+        const blockHash = (
+          await api.rpc.chain.getBlockHash(rs.block_height)
+        ).toHex();
+        // 获取extrinsic hash
+        extrinsicHash = rs.extrinsic_hash;
 
         await revise_database(
           models,
           account,
           firstClaimableAmount,
           secondClaimableAmount,
-          statusHash
+          extrinsicHash,
+          blockHash
         );
 
         return {
@@ -449,7 +464,8 @@ const revise_database = async (
   address,
   firstClaimableAmount,
   secondClaimableAmount,
-  statusHash
+  extrinsicHash,
+  blockHash
 ) => {
   // 修改数据库状态
   let condition = {
@@ -473,7 +489,8 @@ const revise_database = async (
       account: address,
       upper_limit: upper_limit.toFixed(0),
       claimed_amount: firstClaimableAmount.toFixed(0),
-      tx_hash: statusHash,
+      tx_hash: extrinsicHash,
+      block_hash: blockHash,
     };
 
     await models.FirstClaims.create(new_data_1);
@@ -483,7 +500,8 @@ const revise_database = async (
     let new_data_2 = {
       account: address,
       claimed_amount: secondClaimableAmount.toFixed(0),
-      tx_hash: statusHash,
+      tx_hash: extrinsicHash,
+      block_hash: blockHash,
     };
 
     await models.SecondClaims.create(new_data_2);
