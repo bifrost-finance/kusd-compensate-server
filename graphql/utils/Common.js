@@ -270,11 +270,13 @@ export const getCurrentBlock = async () => {
 export const getUserClaimableAmount = async (account, models) => {
   let firstClaimableAmount = BN_ZERO;
   let secondClaimableAmount = BN_ZERO;
+  let theoryCompensation = BN_ZERO;
 
   let {
     total_kusd,
     start_block,
     checkpoint_block,
+    total_compensation,
     first_claimable_total,
     first_claim_compensation_per_block,
   } = await getCalculationConsts(models);
@@ -292,8 +294,12 @@ export const getUserClaimableAmount = async (account, models) => {
     return {
       firstClaimableAmount,
       secondClaimableAmount,
+      theoryCompensation,
     };
   }
+
+  const userPortion = new BigNumber(rs.value).dividedBy(total_kusd);
+  theoryCompensation = userPortion.multipliedBy(total_compensation);
 
   // 获取现在bifrost链上区块。
   const currentBlock = new BigNumber(await getCurrentBlock());
@@ -302,10 +308,9 @@ export const getUserClaimableAmount = async (account, models) => {
     return {
       firstClaimableAmount,
       secondClaimableAmount,
+      theoryCompensation,
     };
   }
-
-  const userPortion = new BigNumber(rs.value).dividedBy(total_kusd);
 
   let firstClaimed = await getClaimedAmount(1, account, models);
   // 如果now<checkpoint,则去查询first_claims有没有记录，没有的话，计算一个，已经有的话，返回0
@@ -320,6 +325,7 @@ export const getUserClaimableAmount = async (account, models) => {
     return {
       firstClaimableAmount,
       secondClaimableAmount,
+      theoryCompensation,
     };
   }
 
@@ -342,6 +348,7 @@ export const getUserClaimableAmount = async (account, models) => {
   return {
     firstClaimableAmount,
     secondClaimableAmount,
+    theoryCompensation,
   };
 };
 
